@@ -1,0 +1,376 @@
+---
+title: "STAT 345 Midterm Project"
+date: "Due April 3"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+font: 12pt
+---
+
+```{r,eval=FALSE}
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(plyr)
+library(dplyr)
+
+#function to get the variables that are on the initial movie list page, none of these variables require clicking into each movie individually
+#output is a data frame with multiple variables
+#each row represents a movie
+    get_variables <- function(url){
+         html <- read_html(url)
+         avg_rating <- as.numeric(html %>% 
+            html_nodes(".ratings-imdb-rating strong") %>%
+            html_text())
+         num_ratings <- html %>% 
+            html_nodes(".sort-num_votes-visible span:nth-child(2)") %>%
+            html_text()
+         release_year <- html %>% 
+            html_nodes(".text-muted.unbold") %>%
+            html_text() 
+         gross_rev <- html %>% 
+            html_nodes(".ghost~ .text-muted+ span") %>%
+            html_text()
+            length(gross_rev)<-50
+         titles <- html %>% 
+            html_nodes(".lister-item-header a") %>%
+            html_text()
+         genres<-  html %>% 
+            html_nodes(".genre") %>%
+            html_text()
+         title<- html %>% html_nodes(".lister-item-header a")
+          titles_attrs<-html_attr(title, "href")
+          ttnumbers<-titles_attrs[1:50]
+          ttnum <- str_sub(ttnumbers, 1, 17)
+          tt<-str_sub(ttnum, (8))
+         
+         
+         return(data.frame(avg_rating,num_ratings,release_year,gross_rev,titles,genres,tt))
+    }
+
+ #vector including the start of each page
+ pages<-c("start=1","start=51","start=101","start=151","start=201","start=251","start=301","start=351","start=401","start=451","start=501","start=55          1","start601","start=651","start=701","start=751","start=801","start=851","start=901","start=951")
+
+ #function to build each page's url, output is a list of url's
+ get_pages <- function(pages){
+   pages_url<-paste("https://www.imdb.com/search/title/?groups=top_1000&",pages,sep="")
+   
+  return(pages_url)
+}
+
+#perform get_pages to everything in pages vector
+pagelinks<-lapply(pages, get_pages)
+pagelinks<-unlist(pagelinks)
+pagelinks<-pagelinks
+pagelinks<-as.vector(pagelinks)
+
+#looping through each page and performing the get_variables function on each
+df<-data.frame()
+for (i in seq_along(pagelinks)) {
+  page<-get_variables(pagelinks[i])
+  df<-rbind(df, page)
+}
+
+ #mutating columns with symbols by substituting the symbols for empty space and then making them the correct type of column 
+ df <- df %>% mutate(release_year=as.numeric(gsub("[()]", "", release_year)))
+ df <- df %>%  mutate(gross_rev=as.numeric(gsub("[$M]", "", gross_rev)))
+ df<- df %>%  mutate(num_ratings=as.numeric(gsub("[,]", "", num_ratings)))
+ df <-df %>%  mutate(genres=as.character(gsub("\n", "", genres)))
+ df <- df %>%  mutate(tt=as.character(gsub('/', "", tt)))
+ 
+```
+
+```{r,eval=FALSE}
+#function to get the top 4 actors per movie, outut is a dataframe
+get_actors <- function(url){
+   html <- read_html(url)
+   title<- html %>% html_nodes(".lister-item-header a")
+four_actors<-html %>% 
+            html_nodes(".lister-item-content .ghost~ a") %>%
+            html_text()
+         four_actors<-as.vector(four_actors)
+            #matrix to get dimensions correct
+            m<-matrix(four_actors, nrow=50, ncol=4)
+            #turning the matrix into a data frame of 4 actor columns with 50 names in each
+            actors<-data.frame(m)
+         
+         return(actors)
+}
+actorsdf<-ldply(pagelinks, get_actors)
+
+#renaming actor columns
+ colnames(actorsdf)[colnames(actorsdf) == 'X1'] <- 'actor1'
+ colnames(actorsdf)[colnames(actorsdf) == 'X2'] <- 'actor2'
+ colnames(actorsdf)[colnames(actorsdf) == 'X3'] <- 'actor3'
+ colnames(actorsdf)[colnames(actorsdf) == 'X4'] <- 'actor4'
+
+
+#adding actor columns to df data frame
+df<-cbind(df,actorsdf)
+```
+
+```{r,eval=FALSE}
+#function that outputs a data frame with a budget for each movie
+get_budget <- function(tt){
+   budget_url<-paste("https://www.imdb.com/title/",tt,sep="")
+   budget_url<-paste(budget_url,"/?ref_=adv_li_tt",sep="")
+   hbudget <- read_html(budget_url)
+   budget<- hbudget %>% 
+             html_nodes("#titleDetails .txt-block:nth-child(12)") %>%
+             html_text() 
+  if(length(budget)==1){
+     return(budget)
+  }
+   else{
+      return(NA)
+   }
+   
+}
+
+#ldply performs function to the list of objects and returns it as a data frame
+budgetdf<-ldply(df$tt, get_budget) 
+
+#renaming the column to Budget
+colnames(budgetdf)<-paste0("Budget")
+
+#making budget into a double by filtering out unnecessary words and symbols
+budgetdf <- budgetdf %>%  mutate(Budget=as.numeric(gsub("[Budget:\n$,(estimated)]", "", Budget)))
+
+#adding budget columns to df data frame
+df<-cbind(df,budgetdf)
+
+```
+
+
+```{r,eval=FALSE}
+#function to get 25 reviews for each movie and return them as a data frame
+get_reviews <- function(tt){
+   reviews_url<-paste("https://www.imdb.com/title/",tt,sep="")
+   reviews_url<-paste(reviews_url,"/reviews",sep="")
+   hreviews <- read_html(reviews_url)
+   reviews<-hreviews %>% 
+             html_nodes(".text") %>%
+             html_text() 
+   length(reviews)<-25
+   
+    return(reviews)
+   
+}
+
+reviewsdf<-ldply(df$tt, get_reviews)
+
+#renaming review columns
+colnames(reviewsdf)<-paste0("Review", 1:25, sep="")
+
+#adding review columns to df data frame
+df<-cbind(df,reviewsdf)
+  
+```
+
+
+```{r,eval=FALSE}
+#function to get the helpfulness numbers as a proportion and return it as a data frame
+get_helpfulness <- function(tt){
+   reviews_url<-paste("https://www.imdb.com/title/",tt,sep="")
+   reviews_url<-paste(reviews_url,"/reviews/?ref_=adv_li_tt",sep="")
+   hreviews <- read_html(reviews_url)
+   helpfulness<-hreviews %>% 
+             html_nodes(".text-muted") %>%
+             html_text()
+   length(helpfulness)<-50
+   
+   #filtering out the letters so we are left with two numbers
+    helpfulness<-helpfulness %>% str_sub(start=3, end=39)
+    helpfulness<-helpfulness %>% str_replace("out of","")
+    helpfulness<-helpfulness %>% str_replace("found","")
+    helpfulness<-helpfulness %>% str_replace("fou","")
+    helpfulness<-helpfulness %>% str_replace("f","")
+    helpfulness<-helpfulness %>% str_replace("n","")
+    helpfulness<-helpfulness %>% str_replace("t","")
+    helpfulness<-helpfulness %>% str_replace(",","")
+    helpfulness<-helpfulness %>% str_replace(",","")
+    
+    #trimming spaces and spliting into a numerator column and a denominator column
+    helpfulness <- str_trim(helpfulness)
+    helpfulness<-helpfulness %>% str_replace(" ","-")
+    helpfulness<-as.numeric(unlist(strsplit(helpfulness,"-",fixed=T)))
+    length(helpfulness)<-50
+    
+   return(helpfulness)
+}
+
+helpfulnessdf<-ldply(df$tt, get_helpfulness)
+
+#dividing columns to get proportions and then outputting a data frame
+helpfulnessdf<-data.frame(matrix(c(helpfulnessdf[,1]/helpfulnessdf[,2],
+         helpfulnessdf[,3]/helpfulnessdf[,4],
+         helpfulnessdf[,5]/helpfulnessdf[,6],
+         helpfulnessdf[,7]/helpfulnessdf[,8],
+         helpfulnessdf[,9]/helpfulnessdf[,10],
+         helpfulnessdf[,11]/helpfulnessdf[,12],
+         helpfulnessdf[,13]/helpfulnessdf[,14],
+         helpfulnessdf[,15]/helpfulnessdf[,16],
+         helpfulnessdf[,17]/helpfulnessdf[,18],
+         helpfulnessdf[,19]/helpfulnessdf[,20],
+         helpfulnessdf[,21]/helpfulnessdf[,22],
+         helpfulnessdf[,23]/helpfulnessdf[,24],
+         helpfulnessdf[,25]/helpfulnessdf[,26],
+         helpfulnessdf[,27]/helpfulnessdf[,28],
+         helpfulnessdf[,29]/helpfulnessdf[,30],
+         helpfulnessdf[,31]/helpfulnessdf[,32],
+         helpfulnessdf[,33]/helpfulnessdf[,34],
+         helpfulnessdf[,35]/helpfulnessdf[,36],
+         helpfulnessdf[,37]/helpfulnessdf[,38],
+         helpfulnessdf[,39]/helpfulnessdf[,40],
+         helpfulnessdf[,41]/helpfulnessdf[,42],
+         helpfulnessdf[,43]/helpfulnessdf[,44],
+         helpfulnessdf[,45]/helpfulnessdf[,46],
+         helpfulnessdf[,47]/helpfulnessdf[,48],
+         helpfulnessdf[,49]/helpfulnessdf[,50]),ncol=25))
+
+#renaming the data frame columns
+colnames(helpfulnessdf) <- paste0("Help_Prop", 1:25, sep="")
+
+#adding helpfulness columns to df data frame
+df<-cbind(df,helpfulnessdf)
+
+write_csv(df, "midtermdf.csv")
+```
+
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(plyr)
+library(dplyr)
+library(dslabs)
+library(ggplot2)
+library(gridExtra)
+
+df<-read_csv("midtermdf.csv")
+
+#Plot of average rating distribution
+p1<-df %>% ggplot(aes(avg_rating)) +
+   geom_density(fill="light blue") +
+   geom_line(stat='density') +
+   scale_x_continuous(limits = c(6.5, 10)) +
+   xlab("Average Movie Rating") + 
+   ylab("Density") +
+   ggtitle("Average Movie Rating Distribution")
+
+#Plot of number of ratings distribution
+p2<-df %>% ggplot(aes(num_ratings)) +
+   geom_density(fill="red") +
+   geom_line(stat='density') +
+   scale_x_continuous(limits = c(-900000,2000000)) +
+   xlab("Number of Movie Ratings") + 
+   ylab("Density") +
+   ggtitle("Number of Movie Ratings Distribution")
+   
+grid.arrange(p1,p2)
+
+#Plot of release year distribution
+p3<-df %>% ggplot(mapping=aes(x=release_year))+
+   geom_density(fill="light pink") +
+   geom_line(stat='density') +
+   scale_x_continuous(limits = c(1890, 2050)) +
+   xlab("Movie Release Year") + 
+   ylab("Density") +
+   ggtitle("Movie Release Year Distribution")
+
+#Plot of gross revenue distribution
+p4<-df %>% ggplot(mapping=aes(x=gross_rev))+
+   geom_density(fill="purple") +
+   geom_line(stat='density') +
+   scale_x_continuous(limits = c(-250, 500)) +
+   xlab("Gross Revenue") + 
+   ylab("Density") +
+   ggtitle("Gross Revenue Distribution")
+
+
+ #Plot of budget distribution
+ p5<- df %>% ggplot(mapping=aes(x=Budget))+
+   geom_density(fill="orange") +
+    geom_line(stat='density') +
+    scale_x_continuous(limits = c(-40000000, 300000000)) +
+    xlab("Budget") + 
+    ylab("Density") +
+   ggtitle("Movie Budget Distribution")
+
+ grid.arrange(p3,p4,p5)
+
+```
+   Density plots are good for visualizing distributions of data over continuous intervals. They help show skew and normality. The average movie rating distribution is slightly bimodal but otherwise tends to have a normal looking distribution. There is a potential, very slight right skew. The two modes are very close to each other. This makes sense because these are the top movies and the range of ratings (0-10) isn't very large. The number of movie ratings is skewed right, or positively. This means that the median and mode are located to the left, or are smaller than the mean. The movie release distribution is skewed left. This means that the majority of the top 1000 movies are newer dates. The are mostly in the 2000's. The gross revenue distribution is skewed right. It has a lot of zero's because a lot of movie's did not provide the gross revenue. The movie budget also has a right skew and a lot of zero's due to budget not being provided for many of the movies. These graphics all show where the mean/median/ and mode are located and the shape of the distribution.  
+
+
+```{r}
+library(tidytext) 
+library(textdata)
+library(sentimentr)
+
+head(df)
+
+```
+
+```{r,eval=FALSE}
+#I ran this chunk before saving my data frame, the sentiments are already in my df data frame, that is why I did eval=FALSE
+#function that inputs the Review columns and outputs a column of review's average sentiment
+get_sentiments<-function(review){
+   sentiment<-sentiment_by(review)
+   sentiment<-sentiment %>% select(ave_sentiment)
+   return(sentiment)
+}
+
+#loops through each review column and performs get_sentiments function on it
+allsentiments<-get_sentiments(df[,13])
+for(i in 14:14){
+   s<-get_sentiments(df[,i])
+   allsentiments<-cbind(allsentiments,s)
+}
+
+#renaming the average sentiment columns
+colnames(allsentiments)<-paste0("avg_sentiment", 1:25, sep="") 
+
+#adding the average sentiments column to the df data frame
+df<-cbind(df,allsentiments)
+df <- df %>% select(1:87)
+
+```
+   
+   The sentimentr package uses Jocker's dictionary for it's sentiment analysis. This package also takes into account valance shifters such as negators, amplifiers, adverse conjunctions, and de-amplifiers. Valence shifters are important to take into account because they can shift the sign of a word from positive to negative or vise versa or change the impact of a polarized word. Valence shifters affect the polarized word, even though they themselves are not polarized words. This is why I felt the sentimentr package would provide a more accurate analysis. It is also a quick and effecient way to get the average sentiment. It takes only a few lines of code, rather than unnesting tokens and rearranging data frames. 
+ 
+
+```{r}
+library(ggplot2)
+library(ggcorrplot)
+
+#selecting numeric movie data columns 
+movie_selected<-df %>% select(1,2,4,12)
+
+#get one helpfulness average per movie
+help_selected<- df %>% select( 38:62)
+help_selected<-data.frame(rowMeans(help_selected))
+
+#adding helpfulness average column to movie_selected data frame
+movie_selected<-cbind(movie_selected, help_selected)
+
+#calculating Pearson correlations between 5 selected movie data columns
+df_corr <- cor(movie_selected, use="complete.obs")
+round(df_corr,3)
+colnames(df_corr)<-c("Rating","Review Helpfulness Average","Budget", "Gross Revenue",  "Number of Ratings")
+rownames(df_corr)<-c("Rating","Review Helpfulness Average","Budget", "Gross Revenue",  "Number of Ratings")
+
+#plot of correlations between 5 different variables using the selected data frame
+ggcorrplot(df_corr, hc.order = TRUE, type = "lower", lab = TRUE, title="Movie Data Correlations", legend.title="Correlation")
+
+
+library("PerformanceAnalytics")
+
+#Pearson correlation test and correlation matrix with scatter plots, histograms, and  Pearson correlation coefficients
+chart.Correlation(df_corr, histogram=TRUE, pch=19)
+
+```
+
+
